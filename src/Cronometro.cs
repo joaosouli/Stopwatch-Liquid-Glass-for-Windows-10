@@ -19,8 +19,8 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("Cronômetro Glass")]
-[assembly: System.Reflection.AssemblyProduct("Cronômetro Glass")]
+[assembly: System.Reflection.AssemblyTitle("Stopwatch")]
+[assembly: System.Reflection.AssemblyProduct("Stopwatch Liquid Glass")]
 [assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
 
 namespace CronometroGlass
