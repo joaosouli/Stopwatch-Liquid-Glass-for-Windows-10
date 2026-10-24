@@ -1,0 +1,3 @@
+# Build output (generate with build.ps1)
+*.exe
+*.pdb
