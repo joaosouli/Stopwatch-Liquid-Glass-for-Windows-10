@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the "Stopwatch-unsigned" artifact uploaded by
+  .github/workflows/build.yml. GitHub delivers the artifact as a ZIP, hence the zip-file root.
+  The workflow passes "version" (the exe's ProductVersion, e.g. 1.2.0.0) with each signing request,
+  so only a build whose metadata matches that version and product name gets signed.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="Stopwatch.exe" product-name="Stopwatch Liquid Glass" product-version="${version}" file-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -23,6 +23,19 @@ time**. Press *Resume* and it picks up where it left off.
 
 Keyboard: <kbd>Space</kbd> starts or pauses.
 
+## Download
+
+Get `Stopwatch.exe` from the [latest release](https://github.com/joaosouli/Stopwatch-Liquid-Glass-for-Windows-10/releases/latest)
+and run it. There's no installer. Release builds are produced by GitHub Actions from this repository
+and signed through SignPath (see the [code signing policy](#code-signing-policy)).
+
+## Uninstall
+
+1. If you turned on *Open with Windows*, turn it off from the app first (this removes its entry from
+   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+2. Close the app and delete `Stopwatch.exe`.
+3. Delete the folder `%LOCALAPPDATA%\CronometroGlass` to remove the saved time and settings.
+
 ## How the time is saved
 
 The state lives in `%LOCALAPPDATA%\CronometroGlass\estado.bin`, a 128-byte file with **two slots**
@@ -47,10 +60,38 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 This produces `Stopwatch.exe` next to the script. Everything is in a single source file,
 [`src/Cronometro.cs`](src/Cronometro.cs): WPF with the UI written as inline XAML.
 
+Every push is also built by [GitHub Actions](.github/workflows/build.yml) on a GitHub-hosted
+Windows runner. Version tags (`v1.2`, `v1.3`, ...) are sent to SignPath for signing, and the signed
+`.exe` is attached to the release.
+
 ## Requirements
 
 - Windows 10 (version 1803 or later for the blur effect)
 - .NET Framework 4.5+ (preinstalled on Windows 10)
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+Only `Stopwatch.exe` built from this repository by the [GitHub Actions workflow](.github/workflows/build.yml)
+is signed. Each signing request is approved manually.
+
+**Team roles**
+
+- Committers and reviewers: [João Vitor Souza Lisboa (@joaosouli)](https://github.com/joaosouli)
+- Approvers: [João Vitor Souza Lisboa (@joaosouli)](https://github.com/joaosouli)
+
+Changes from outside contributors are only merged through pull requests reviewed by a committer.
+
+**Privacy policy**
+
+This program will not transfer any information to other networked systems unless specifically
+requested by the user or the person installing or operating it.
+
+It only writes to your own computer: the saved time and settings in `%LOCALAPPDATA%\CronometroGlass`,
+and, only if you turn on *Open with Windows*, one value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## License
 

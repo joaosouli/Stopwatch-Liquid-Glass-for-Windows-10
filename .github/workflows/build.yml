@@ -1,0 +1,119 @@
+# Builds Stopwatch.exe on every push. On a version tag (v1.2, v1.3, ...) it also sends the
+# build to SignPath for code signing and attaches the signed .exe to a draft GitHub release.
+# Signing only runs once the SignPath settings below exist in the repository:
+#   secret   SIGNPATH_API_TOKEN
+#   variable SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Stopwatch.exe
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build
+        shell: powershell
+        run: .\build.ps1
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Item .\Stopwatch.exe).VersionInfo.ProductVersion
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+              # the tag (v1.2) must match AssemblyVersion (1.2.0.0) so the release ships what it says
+              $t = [version]$env:GITHUB_REF_NAME.TrimStart('v')
+              $p = [version]$v
+              if ($t.Major -ne $p.Major -or $t.Minor -ne $p.Minor -or
+                  [Math]::Max($t.Build, 0) -ne $p.Build -or [Math]::Max($t.Revision, 0) -ne $p.Revision) {
+                  throw "Tag $env:GITHUB_REF_NAME does not match AssemblyVersion $v"
+              }
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          $hash = (Get-FileHash .\Stopwatch.exe -Algorithm SHA256).Hash
+          "Stopwatch.exe $v (unsigned) SHA-256: ``$hash``" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload unsigned build
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: Stopwatch-unsigned
+          path: Stopwatch.exe
+          if-no-files-found: error
+
+  sign:
+    name: Sign with SignPath
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: windows-latest
+    # every signing request waits for a manual approval in SignPath
+    timeout-minutes: 330
+    steps:
+      - name: Submit signing request
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ needs.build.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 19200
+          output-artifact-directory: signed
+          parameters: |
+            version: "${{ needs.build.outputs.version }}"
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature .\signed\Stopwatch.exe
+          if ($sig.Status -ne 'Valid') { throw "Signature is $($sig.Status): $($sig.StatusMessage)" }
+          "Signed by: $($sig.SignerCertificate.Subject)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload signed build
+        uses: actions/upload-artifact@v7
+        with:
+          name: Stopwatch-signed
+          path: signed/Stopwatch.exe
+          if-no-files-found: error
+
+  release:
+    name: Attach to GitHub release
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: Stopwatch-signed
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          hash=$(sha256sum Stopwatch.exe | cut -d' ' -f1 | tr a-f A-F)
+          notes=$(printf '%s\n\n%s\n```\n%s\n```\n\n%s\n' \
+            '**Download `Stopwatch.exe` below and run it.** There is no installer. It works on Windows 10 1803 or later.' \
+            'SHA-256 of `Stopwatch.exe`:' "$hash" \
+            'Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See the [code signing policy](https://github.com/${{ github.repository }}#code-signing-policy).')
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes "$notes"
+          fi
+          gh release upload "$TAG" Stopwatch.exe --clobber
