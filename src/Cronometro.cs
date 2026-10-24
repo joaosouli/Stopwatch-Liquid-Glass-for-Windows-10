@@ -22,7 +22,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Stopwatch")]
 [assembly: System.Reflection.AssemblyProduct("Stopwatch Liquid Glass")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 João Vitor Souza Lisboa")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
 
 namespace CronometroGlass
 {
