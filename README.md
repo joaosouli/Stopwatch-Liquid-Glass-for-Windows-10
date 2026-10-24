@@ -18,7 +18,7 @@ time**. Press *Resume* and it picks up where it left off.
 - **English and Portuguese:** on first launch it follows the Windows display language
   (Portuguese for `pt-*`, otherwise English). You can switch any time from the ⚙ gear in the top-left corner.
 - **Open with Windows** (optional): one click registers it to start when you log in.
-- **Lightweight:** a single ~85 KB `.exe`, no installer, no dependencies beyond the .NET Framework
+- **Lightweight:** a single ~330 KB `.exe`, no installer, no dependencies beyond the .NET Framework
   already included in Windows 10. Uses almost no CPU while paused.
 
 Keyboard: <kbd>Space</kbd> starts or pauses.
@@ -44,7 +44,7 @@ You don't need Visual Studio. The C# compiler that ships with Windows (.NET Fram
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-This produces `Cronometro.exe` next to the script. Everything is in a single source file,
+This produces `Stopwatch.exe` next to the script. Everything is in a single source file,
 [`src/Cronometro.cs`](src/Cronometro.cs): WPF with the UI written as inline XAML.
 
 ## Requirements

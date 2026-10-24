@@ -36,8 +36,8 @@ if (-not (Test-Path $icon)) {
 }
 
 & "$fw\csc.exe" /nologo /target:winexe /optimize+ /codepage:65001 /platform:anycpu `
-    "/out:$root\Cronometro.exe" "/win32icon:$icon" `
+    "/out:$root\Stopwatch.exe" "/win32icon:$icon" `
     "/r:$wpf\PresentationFramework.dll" "/r:$wpf\PresentationCore.dll" "/r:$wpf\WindowsBase.dll" `
     "/r:$fw\System.Xaml.dll" "$root\src\Cronometro.cs"
 if ($LASTEXITCODE -ne 0) { throw "Falha na compilação" }
-Write-Host "OK -> $root\Cronometro.exe"
+Write-Host "OK -> $root\Stopwatch.exe"
