@@ -51,3 +51,7 @@ This produces `Cronometro.exe` next to the script. Everything is in a single sou
 
 - Windows 10 (version 1803 or later for the blur effect)
 - .NET Framework 4.5+ (preinstalled on Windows 10)
+
+## License
+
+[MIT](LICENSE)
