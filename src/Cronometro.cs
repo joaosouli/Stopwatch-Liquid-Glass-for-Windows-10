@@ -21,7 +21,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Cronômetro Glass")]
 [assembly: System.Reflection.AssemblyProduct("Cronômetro Glass")]
-[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
 
 namespace CronometroGlass
 {
