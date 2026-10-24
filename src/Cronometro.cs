@@ -21,7 +21,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Cronômetro Glass")]
 [assembly: System.Reflection.AssemblyProduct("Cronômetro Glass")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
 
 namespace CronometroGlass
 {
@@ -152,6 +152,53 @@ namespace CronometroGlass
         }
     }
 
+    /// <summary>Textos da interface em cada idioma.</summary>
+    sealed class Lang
+    {
+        public string Code, Title, Start, Pause, Resume, Reset, Confirm;
+        public string StatusReady, StatusRunning, StatusPaused, StatusRecovered, StatusSaveFailed;
+        public string OpenWithWindows, OpenWithWindowsTip, Minimize, Maximize, Restore, Close, Settings, Language;
+        public string DecimalSep, RecoveredFormat;
+        public CultureInfo Culture;
+
+        public static readonly Lang Pt = new Lang
+        {
+            Code = "pt", Title = "Cronômetro",
+            Start = "Iniciar", Pause = "Pausar", Resume = "Continuar", Reset = "Zerar", Confirm = "Confirmar",
+            StatusReady = "Pronto · espaço inicia/pausa", StatusRunning = "Rodando · salvando no disco",
+            StatusPaused = "Pausado · tempo salvo", StatusRecovered = "Recuperado · ",
+            StatusSaveFailed = "Não foi possível salvar no disco",
+            OpenWithWindows = "Abrir com o Windows", OpenWithWindowsTip = "Abrir automaticamente quando o PC ligar",
+            Minimize = "Minimizar", Maximize = "Maximizar", Restore = "Restaurar tamanho",
+            Close = "Fechar (pausa e salva)", Settings = "Configurações", Language = "Idioma",
+            DecimalSep = ",", RecoveredFormat = "dd/MM HH:mm", Culture = new CultureInfo("pt-BR")
+        };
+
+        public static readonly Lang En = new Lang
+        {
+            Code = "en", Title = "Stopwatch",
+            Start = "Start", Pause = "Pause", Resume = "Resume", Reset = "Reset", Confirm = "Confirm",
+            StatusReady = "Ready · space starts/pauses", StatusRunning = "Running · saving to disk",
+            StatusPaused = "Paused · time saved", StatusRecovered = "Recovered · ",
+            StatusSaveFailed = "Couldn't save to disk",
+            OpenWithWindows = "Open with Windows", OpenWithWindowsTip = "Open automatically when the PC starts",
+            Minimize = "Minimize", Maximize = "Maximize", Restore = "Restore size",
+            Close = "Close (pauses and saves)", Settings = "Settings", Language = "Language",
+            DecimalSep = ".", RecoveredFormat = "MMM d, HH:mm", Culture = new CultureInfo("en-US")
+        };
+
+        public static Lang FromCode(string code)
+        {
+            return code == "pt" ? Pt : En;
+        }
+
+        /// <summary>Idioma do Windows na primeira execução: português se for pt-*, senão inglês.</summary>
+        public static Lang FromSystem()
+        {
+            return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "pt" ? Pt : En;
+        }
+    }
+
     sealed class TimerController
     {
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -184,10 +231,14 @@ namespace CronometroGlass
         DateTime recoveredAt;
         bool startMaximized;
         readonly DispatcherTimer settingsTimer;
+        Lang L;
+        DateTime popupClosedAt;
 
         readonly TextBlock timeMain, timeFrac, statusText, startGlyph, startText, resetText, autoGlyph;
+        readonly TextBlock titleText, autoText, langHeader, checkPt, checkEn;
         readonly Ellipse statusDot;
-        readonly Button startBtn, resetBtn, maxBtn, autoBtn;
+        readonly Button startBtn, resetBtn, minBtn, maxBtn, closeBtn, autoBtn, gearBtn;
+        readonly System.Windows.Controls.Primitives.Popup langPopup;
         readonly Border glassBody, sheen, rim;
         readonly FrameworkElement root, timeBox;
 
@@ -206,9 +257,18 @@ namespace CronometroGlass
             startText = Find<TextBlock>("StartText");
             resetBtn = Find<Button>("ResetBtn");
             resetText = Find<TextBlock>("ResetText");
+            minBtn = Find<Button>("MinBtn");
             maxBtn = Find<Button>("MaxBtn");
+            closeBtn = Find<Button>("CloseBtn");
             autoBtn = Find<Button>("AutoBtn");
             autoGlyph = Find<TextBlock>("AutoGlyph");
+            autoText = Find<TextBlock>("AutoText");
+            titleText = Find<TextBlock>("TitleText");
+            gearBtn = Find<Button>("GearBtn");
+            langPopup = Find<System.Windows.Controls.Primitives.Popup>("LangPopup");
+            langHeader = Find<TextBlock>("LangHeader");
+            checkPt = Find<TextBlock>("CheckPt");
+            checkEn = Find<TextBlock>("CheckEn");
             glassBody = Find<Border>("GlassBody");
             sheen = Find<Border>("Sheen");
             rim = Find<Border>("Rim");
@@ -236,8 +296,20 @@ namespace CronometroGlass
             // Comandos de sistema (SC_MINIMIZE/SC_MAXIMIZE/SC_RESTORE): o Windows anima a janela como qualquer outra.
             startBtn.Click += delegate { Toggle(); };
             resetBtn.Click += delegate { ResetClicked(); };
-            Find<Button>("CloseBtn").Click += delegate { Window.Close(); };
-            Find<Button>("MinBtn").Click += delegate { SystemCommands.MinimizeWindow(Window); };
+            closeBtn.Click += delegate { Window.Close(); };
+            minBtn.Click += delegate { SystemCommands.MinimizeWindow(Window); };
+
+            // Engrenagem: menu de idioma. O Popup fecha sozinho ao clicar fora; o intervalo evita que o
+            // mesmo clique na engrenagem que o fechou o abra de novo.
+            langPopup.PlacementTarget = gearBtn;
+            langPopup.Closed += delegate { popupClosedAt = DateTime.UtcNow; };
+            gearBtn.Click += delegate
+            {
+                if ((DateTime.UtcNow - popupClosedAt).TotalMilliseconds < 250) return;
+                langPopup.IsOpen = !langPopup.IsOpen;
+            };
+            Find<Button>("LangPt").Click += delegate { SetLanguage(Lang.Pt); };
+            Find<Button>("LangEn").Click += delegate { SetLanguage(Lang.En); };
             maxBtn.Click += delegate { ToggleMaximize(); };
             autoBtn.Click += delegate { ToggleAutostart(); };
 
@@ -277,7 +349,37 @@ namespace CronometroGlass
 
             LoadSettings();
             if (startMaximized) Window.WindowState = WindowState.Maximized;
+            if (L == null)
+            {
+                // Primeira vez: segue o idioma do Windows e grava a escolha.
+                L = Lang.FromSystem();
+                SaveSettings();
+            }
             RefreshAutostartPath();
+            ApplyLanguage();
+        }
+
+        void SetLanguage(Lang lang)
+        {
+            langPopup.IsOpen = false;
+            if (lang == L) return;
+            L = lang;
+            ApplyLanguage();
+            SaveSettings();
+        }
+
+        void ApplyLanguage()
+        {
+            Window.Title = L.Title;
+            titleText.Text = L.Title;
+            autoText.Text = L.OpenWithWindows;
+            autoBtn.ToolTip = L.OpenWithWindowsTip;
+            minBtn.ToolTip = L.Minimize;
+            closeBtn.ToolTip = L.Close;
+            gearBtn.ToolTip = L.Settings;
+            langHeader.Text = L.Language;
+            checkPt.Visibility = L == Lang.Pt ? Visibility.Visible : Visibility.Hidden;
+            checkEn.Visibility = L == Lang.En ? Visibility.Visible : Visibility.Hidden;
             Render();
             UpdateChrome();
         }
@@ -371,25 +473,27 @@ namespace CronometroGlass
 
         void Render()
         {
+            if (L == null) return;
             var ts = TimeSpan.FromTicks(Elapsed);
             string main = string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00}", (long)ts.TotalHours, ts.Minutes, ts.Seconds);
-            string frac = "," + (ts.Milliseconds / 10).ToString("00", CultureInfo.InvariantCulture);
+            string frac = L.DecimalSep + (ts.Milliseconds / 10).ToString("00", CultureInfo.InvariantCulture);
             if (timeMain.Text != main) timeMain.Text = main;
             if (timeFrac.Text != frac) timeFrac.Text = frac;
         }
 
         void UpdateChrome()
         {
+            if (L == null) return; // ainda carregando: ApplyLanguage atualiza tudo em seguida
             startGlyph.Text = running ? "" : "";
-            startText.Text = running ? "Pausar" : (Elapsed > 0 ? "Continuar" : "Iniciar");
+            startText.Text = running ? L.Pause : (Elapsed > 0 ? L.Resume : L.Start);
             startBtn.Background = running ? PauseTint : StartTint;
 
-            resetText.Text = resetArmed ? "Confirmar" : "Zerar";
+            resetText.Text = resetArmed ? L.Confirm : L.Reset;
             resetBtn.Background = resetArmed ? ConfirmTint : ResetTint;
             resetBtn.Opacity = (Elapsed == 0 && !running) ? 0.45 : 1;
 
             maxBtn.Content = IsMaximized ? "" : "";
-            maxBtn.ToolTip = IsMaximized ? "Restaurar tamanho" : "Maximizar";
+            maxBtn.ToolTip = IsMaximized ? L.Restore : L.Maximize;
 
             autoGlyph.Text = IsAutostart() ? "" : "";
             autoGlyph.Opacity = 1;
@@ -397,27 +501,27 @@ namespace CronometroGlass
             if (saveFailed)
             {
                 statusDot.Fill = DotRed;
-                statusText.Text = "Não foi possível salvar no disco";
+                statusText.Text = L.StatusSaveFailed;
             }
             else if (running)
             {
                 statusDot.Fill = DotGreen;
-                statusText.Text = "Rodando · salvando no disco";
+                statusText.Text = L.StatusRunning;
             }
             else if (recovered)
             {
                 statusDot.Fill = DotAmber;
-                statusText.Text = "Recuperado · " + recoveredAt.ToString("dd/MM HH:mm", CultureInfo.InvariantCulture);
+                statusText.Text = L.StatusRecovered + recoveredAt.ToString(L.RecoveredFormat, L.Culture);
             }
             else if (Elapsed > 0)
             {
                 statusDot.Fill = DotIdle;
-                statusText.Text = "Pausado · tempo salvo";
+                statusText.Text = L.StatusPaused;
             }
             else
             {
                 statusDot.Fill = DotIdle;
-                statusText.Text = "Pronto · espaço inicia/pausa";
+                statusText.Text = L.StatusReady;
             }
         }
 
@@ -522,6 +626,7 @@ namespace CronometroGlass
                     if (key == "left") double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out left);
                     else if (key == "top") double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out top);
                     else if (key == "max") startMaximized = val == "1";
+                    else if (key == "lang") L = Lang.FromCode(val);
                 }
                 var vs = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
                                   SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
@@ -545,7 +650,7 @@ namespace CronometroGlass
             try
             {
                 File.WriteAllText(SettingsPath, string.Format(CultureInfo.InvariantCulture,
-                    "left={0}\ntop={1}\nmax={2}\n", left, top, IsMaximized ? 1 : 0));
+                    "left={0}\ntop={1}\nmax={2}\nlang={3}\n", left, top, IsMaximized ? 1 : 0, L == null ? "" : L.Code));
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
@@ -770,6 +875,27 @@ namespace CronometroGlass
       </Setter>
     </Style>
 
+    <Style x:Key='MenuRow' TargetType='Button'>
+      <Setter Property='Foreground' Value='White'/>
+      <Setter Property='FontSize' Value='13'/>
+      <Setter Property='Height' Value='34'/>
+      <Setter Property='Focusable' Value='False'/>
+      <Setter Property='Cursor' Value='Hand'/>
+      <Setter Property='Template'>
+        <Setter.Value>
+          <ControlTemplate TargetType='Button'>
+            <Border x:Name='Row' CornerRadius='9' Background='Transparent' Padding='10,0,10,0'>
+              <ContentPresenter VerticalAlignment='Center'/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Row' Property='Background' Value='#24FFFFFF'/></Trigger>
+              <Trigger Property='IsPressed' Value='True'><Setter TargetName='Row' Property='Background' Value='#38FFFFFF'/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key='Link' TargetType='Button'>
       <Setter Property='Foreground' Value='White'/>
       <Setter Property='Focusable' Value='False'/>
@@ -847,12 +973,53 @@ namespace CronometroGlass
         <RowDefinition Height='44'/>
       </Grid.RowDefinitions>
 
+      <Button x:Name='GearBtn' Style='{StaticResource Chrome}' HorizontalAlignment='Left' VerticalAlignment='Center' Margin='-12,4,0,0'>
+        <TextBlock Text='&#xE713;' FontFamily='Segoe MDL2 Assets' FontSize='12'/>
+      </Button>
+      <Popup x:Name='LangPopup' Placement='Bottom' HorizontalOffset='-6' VerticalOffset='2'
+             StaysOpen='False' AllowsTransparency='True' PopupAnimation='Fade'>
+        <!-- menu de vidro: o Popup não recebe o desfoque do Windows, então a tinta é mais densa -->
+        <Border Margin='8,4,8,14' Width='176' Padding='5' CornerRadius='14' BorderThickness='1'>
+          <Border.Background>
+            <LinearGradientBrush StartPoint='0,0' EndPoint='1,1'>
+              <GradientStop Color='#F2363A52' Offset='0'/>
+              <GradientStop Color='#F21E1F2C' Offset='1'/>
+            </LinearGradientBrush>
+          </Border.Background>
+          <Border.BorderBrush>
+            <LinearGradientBrush StartPoint='0,0' EndPoint='1,1'>
+              <GradientStop Color='#A0FFFFFF' Offset='0'/>
+              <GradientStop Color='#18FFFFFF' Offset='0.5'/>
+              <GradientStop Color='#50FFFFFF' Offset='1'/>
+            </LinearGradientBrush>
+          </Border.BorderBrush>
+          <Border.Effect><DropShadowEffect BlurRadius='16' ShadowDepth='4' Opacity='0.45' Color='Black'/></Border.Effect>
+          <StackPanel>
+            <TextBlock x:Name='LangHeader' Foreground='#99FFFFFF' FontSize='11' FontWeight='SemiBold' Margin='10,5,10,5'/>
+            <Button x:Name='LangPt' Style='{StaticResource MenuRow}'>
+              <Grid>
+                <TextBlock Text='Português'/>
+                <TextBlock x:Name='CheckPt' Text='&#xE73E;' FontFamily='Segoe MDL2 Assets' FontSize='11' Foreground='#FF30D158'
+                           HorizontalAlignment='Right' VerticalAlignment='Center'/>
+              </Grid>
+            </Button>
+            <Button x:Name='LangEn' Style='{StaticResource MenuRow}'>
+              <Grid>
+                <TextBlock Text='English'/>
+                <TextBlock x:Name='CheckEn' Text='&#xE73E;' FontFamily='Segoe MDL2 Assets' FontSize='11' Foreground='#FF30D158'
+                           HorizontalAlignment='Right' VerticalAlignment='Center'/>
+              </Grid>
+            </Button>
+          </StackPanel>
+        </Border>
+      </Popup>
+
       <StackPanel Orientation='Horizontal' HorizontalAlignment='Right' VerticalAlignment='Center' Margin='0,4,-12,0'>
-        <Button x:Name='MinBtn' Style='{StaticResource Chrome}' Content='&#xE921;' ToolTip='Minimizar'/>
+        <Button x:Name='MinBtn' Style='{StaticResource Chrome}' Content='&#xE921;'/>
         <Button x:Name='MaxBtn' Style='{StaticResource Chrome}' Content='&#xE922;'/>
-        <Button x:Name='CloseBtn' Style='{StaticResource Chrome}' Background='#D9FF453A' Content='&#xE8BB;' ToolTip='Fechar (pausa e salva)'/>
+        <Button x:Name='CloseBtn' Style='{StaticResource Chrome}' Background='#D9FF453A' Content='&#xE8BB;'/>
       </StackPanel>
-      <TextBlock Text='Cronômetro' Foreground='#99FFFFFF' FontSize='12' FontWeight='SemiBold'
+      <TextBlock x:Name='TitleText' Foreground='#99FFFFFF' FontSize='12' FontWeight='SemiBold'
                  HorizontalAlignment='Center' VerticalAlignment='Center' Margin='0,4,0,0' IsHitTestVisible='False'/>
 
       <!-- Viewbox: o tempo cresce junto com a janela quando maximizada -->
@@ -897,7 +1064,7 @@ namespace CronometroGlass
             <Border Width='13' Height='13' CornerRadius='4' BorderBrush='#99FFFFFF' BorderThickness='1' Margin='0,1,6,0' VerticalAlignment='Center'>
               <TextBlock x:Name='AutoGlyph' FontFamily='Segoe MDL2 Assets' FontSize='9' HorizontalAlignment='Center' VerticalAlignment='Center'/>
             </Border>
-            <TextBlock Text='Abrir com o Windows' FontSize='11.5' VerticalAlignment='Center'/>
+            <TextBlock x:Name='AutoText' FontSize='11.5' VerticalAlignment='Center'/>
           </StackPanel>
         </Button>
       </Grid>

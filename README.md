@@ -5,7 +5,7 @@ A tiny stopwatch for Windows 10 with an Apple "Liquid Glass"-style interface, bu
 
 While it runs, the elapsed time is written to disk every half second. If the power goes out or
 Windows crashes, the next time you open it the stopwatch comes back **paused at the last saved
-time**. Press *Continuar* and it picks up where it left off.
+time**. Press *Resume* and it picks up where it left off.
 
 ## Features
 
@@ -14,7 +14,9 @@ time**. Press *Continuar* and it picks up where it left off.
 - **Native window animations:** minimize, maximize and restore use the standard Windows 10 animations.
   Aero Snap and the system menu work too.
 - **Maximize:** the time scales up to fill the screen.
-- **Safe reset:** *Zerar* asks for a second click to confirm.
+- **Safe reset:** *Reset* asks for a second click to confirm.
+- **English and Portuguese:** on first launch it follows the Windows display language
+  (Portuguese for `pt-*`, otherwise English). You can switch any time from the ⚙ gear in the top-left corner.
 - **Open with Windows** (optional): one click registers it to start when you log in.
 - **Lightweight:** a single ~85 KB `.exe`, no installer, no dependencies beyond the .NET Framework
   already included in Windows 10. Uses almost no CPU while paused.
@@ -30,7 +32,7 @@ On startup the valid slot with the highest sequence wins, so a power cut in the 
 can never corrupt the saved time.
 
 If the last saved state says "running", the app knows it didn't close normally. It restores that
-time paused and shows *Recuperado* with the date and time of the last save.
+time paused and shows *Recovered* with the date and time of the last save.
 
 A normal Windows shutdown, sleep, or closing the app also pauses the stopwatch and saves.
 
@@ -49,5 +51,3 @@ This produces `Cronometro.exe` next to the script. Everything is in a single sou
 
 - Windows 10 (version 1803 or later for the blur effect)
 - .NET Framework 4.5+ (preinstalled on Windows 10)
-
-The interface is in Portuguese (Brazil).
