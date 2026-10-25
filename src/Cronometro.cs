@@ -22,7 +22,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Stopwatch")]
 [assembly: System.Reflection.AssemblyProduct("Stopwatch Liquid Glass")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 João Vitor Souza Lisboa")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
 
 namespace CronometroGlass
 {
@@ -153,12 +153,42 @@ namespace CronometroGlass
         }
     }
 
+    /// <summary>
+    /// Uma camada: cronômetro independente, com nome e arquivo de estado próprios.
+    /// Várias camadas podem rodar ao mesmo tempo (ex.: "Trabalho" e "Jogando").
+    /// </summary>
+    sealed class Layer
+    {
+        public readonly StateStore Store;
+        public readonly Stopwatch Sw = new Stopwatch();
+        public long BaseTicks;
+        public bool Running, Recovered, SaveFailed;
+        public DateTime RecoveredAt;
+        public string Name = ""; // vazio = nome padrão traduzido ("Camada 1")
+
+        public Layer(string path)
+        {
+            Store = new StateStore(path);
+            if (!Store.HasState) return;
+            BaseTicks = Store.LoadedTicks;
+            // Estava rodando quando foi salvo pela última vez = o PC/app caiu sem fechar.
+            Recovered = Store.LoadedRunning;
+            RecoveredAt = Store.LoadedSavedUtc.ToLocalTime();
+        }
+
+        public long Elapsed
+        {
+            get { return BaseTicks + (Running ? Sw.Elapsed.Ticks : 0); }
+        }
+    }
+
     /// <summary>Textos da interface em cada idioma.</summary>
     sealed class Lang
     {
         public string Code, Title, Start, Pause, Resume, Reset, Confirm;
         public string StatusReady, StatusRunning, StatusPaused, StatusRecovered, StatusSaveFailed;
         public string OpenWithWindows, OpenWithWindowsTip, Minimize, Maximize, Restore, Close, Settings, Language;
+        public string Layers, TwoLayers, RenameLayer, RenameTip, LayerFormat;
         public string DecimalSep, RecoveredFormat;
         public CultureInfo Culture;
 
@@ -172,6 +202,8 @@ namespace CronometroGlass
             OpenWithWindows = "Abrir com o Windows", OpenWithWindowsTip = "Abrir automaticamente quando o PC ligar",
             Minimize = "Minimizar", Maximize = "Maximizar", Restore = "Restaurar tamanho",
             Close = "Fechar (pausa e salva)", Settings = "Configurações", Language = "Idioma",
+            Layers = "Camadas", TwoLayers = "Duas camadas", RenameLayer = "Renomear camada",
+            RenameTip = "Clique duplo para renomear", LayerFormat = "Camada {0}",
             DecimalSep = ",", RecoveredFormat = "dd/MM HH:mm", Culture = new CultureInfo("pt-BR")
         };
 
@@ -185,6 +217,8 @@ namespace CronometroGlass
             OpenWithWindows = "Open with Windows", OpenWithWindowsTip = "Open automatically when the PC starts",
             Minimize = "Minimize", Maximize = "Maximize", Restore = "Restore size",
             Close = "Close (pauses and saves)", Settings = "Settings", Language = "Language",
+            Layers = "Layers", TwoLayers = "Two layers", RenameLayer = "Rename layer",
+            RenameTip = "Double-click to rename", LayerFormat = "Layer {0}",
             DecimalSep = ".", RecoveredFormat = "MMM d, HH:mm", Culture = new CultureInfo("en-US")
         };
 
@@ -214,22 +248,26 @@ namespace CronometroGlass
         static readonly Brush DotAmber = Hex("#FFFFD60A");
         static readonly Brush DotIdle = Hex("#80FFFFFF");
         static readonly Brush DotRed = Hex("#FFFF453A");
+        static readonly Brush TabOn = Hex("#30FFFFFF");
+        static readonly Brush TabOnRim = Hex("#45FFFFFF");
+        static readonly Brush TabOnText = Hex("#FFFFFFFF");
+        static readonly Brush TabOffText = Hex("#A6FFFFFF");
+        const double NormalHeight = 250;
+        const double LayersHeight = 284; // + a fileira das abas
 
         public readonly Window Window;
 
         readonly string dataDir;
-        readonly StateStore store;
-        readonly Stopwatch sw = new Stopwatch();
+        // Camada 1 usa o mesmo estado.bin de antes, então o tempo já salvo continua nela.
+        readonly Layer[] layers;
+        int active;
+        bool twoLayers;
+        int renaming = -1;
         readonly DispatcherTimer uiTimer;
         readonly DispatcherTimer saveTimer;
         readonly DispatcherTimer disarmTimer;
 
-        long baseTicks;
-        bool running;
-        bool recovered;
         bool resetArmed;
-        bool saveFailed;
-        DateTime recoveredAt;
         bool startMaximized;
         readonly DispatcherTimer settingsTimer;
         Lang L;
@@ -237,16 +275,31 @@ namespace CronometroGlass
 
         readonly TextBlock timeMain, timeFrac, statusText, startGlyph, startText, resetText, autoGlyph;
         readonly TextBlock titleText, autoText, langHeader, checkPt, checkEn;
+        readonly TextBlock layersHeader, twoLayersText, checkLayers, renameText;
         readonly Ellipse statusDot;
-        readonly Button startBtn, resetBtn, minBtn, maxBtn, closeBtn, autoBtn, gearBtn;
+        readonly Button startBtn, resetBtn, minBtn, maxBtn, closeBtn, autoBtn, gearBtn, renameBtn;
         readonly System.Windows.Controls.Primitives.Popup langPopup;
-        readonly Border glassBody, sheen, rim;
+        readonly Border glassBody, sheen, rim, layerTabs;
         readonly FrameworkElement root, timeBox;
+        readonly Button[] tabBtn = new Button[2];
+        readonly Ellipse[] tabDot = new Ellipse[2];
+        readonly TextBlock[] tabName = new TextBlock[2];
+        readonly Border[] editBorder = new Border[2];
+        readonly TextBox[] editBox = new TextBox[2];
+
+        Layer Cur
+        {
+            get { return layers[active]; }
+        }
 
         public TimerController(Application app, EventWaitHandle showSignal)
         {
             dataDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CronometroGlass");
-            store = new StateStore(System.IO.Path.Combine(dataDir, "estado.bin"));
+            layers = new[]
+            {
+                new Layer(System.IO.Path.Combine(dataDir, "estado.bin")),
+                new Layer(System.IO.Path.Combine(dataDir, "estado2.bin"))
+            };
 
             Window = (Window)XamlReader.Parse(Xaml);
             timeMain = Find<TextBlock>("TimeMain");
@@ -275,20 +328,32 @@ namespace CronometroGlass
             rim = Find<Border>("Rim");
             root = Find<FrameworkElement>("Root");
             timeBox = Find<FrameworkElement>("TimeBox");
-
-            if (store.HasState)
+            layerTabs = Find<Border>("LayerTabs");
+            layersHeader = Find<TextBlock>("LayersHeader");
+            twoLayersText = Find<TextBlock>("TwoLayersText");
+            checkLayers = Find<TextBlock>("CheckLayers");
+            renameBtn = Find<Button>("RenameBtn");
+            renameText = Find<TextBlock>("RenameText");
+            for (int i = 0; i < 2; i++)
             {
-                baseTicks = store.LoadedTicks;
-                // Estava rodando quando foi salvo pela última vez = o PC/app caiu sem fechar.
-                recovered = store.LoadedRunning;
-                recoveredAt = store.LoadedSavedUtc.ToLocalTime();
-                if (recovered) TrySave(baseTicks, false);
+                tabBtn[i] = Find<Button>("Tab" + i);
+                tabDot[i] = Find<Ellipse>("TabDot" + i);
+                tabName[i] = Find<TextBlock>("TabName" + i);
+                editBorder[i] = Find<Border>("Edit" + i);
+                editBox[i] = Find<TextBox>("EditBox" + i);
             }
+
+            foreach (var l in layers)
+                if (l.Recovered) TrySave(l, l.BaseTicks, false);
 
             uiTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(40) };
             uiTimer.Tick += delegate { Render(); };
             saveTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(500) };
-            saveTimer.Tick += delegate { TrySave(Elapsed, true); };
+            saveTimer.Tick += delegate
+            {
+                foreach (var l in layers)
+                    if (l.Running) TrySave(l, l.Elapsed, true);
+            };
             disarmTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             disarmTimer.Tick += delegate { DisarmReset(); };
             settingsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
@@ -311,8 +376,33 @@ namespace CronometroGlass
             };
             Find<Button>("LangPt").Click += delegate { SetLanguage(Lang.Pt); };
             Find<Button>("LangEn").Click += delegate { SetLanguage(Lang.En); };
+            Find<Button>("TwoLayersBtn").Click += delegate { ToggleTwoLayers(); };
+            renameBtn.Click += delegate
+            {
+                langPopup.IsOpen = false;
+                BeginRename(active);
+            };
             maxBtn.Click += delegate { ToggleMaximize(); };
             autoBtn.Click += delegate { ToggleAutostart(); };
+
+            // Abas das camadas: clique troca, clique duplo renomeia (Enter confirma, Esc cancela).
+            for (int i = 0; i < 2; i++)
+            {
+                int idx = i;
+                tabBtn[i].Click += delegate { SelectLayer(idx); };
+                tabBtn[i].MouseDoubleClick += delegate { BeginRename(idx); };
+                editBox[i].KeyDown += delegate(object s, KeyEventArgs e)
+                {
+                    if (e.Key == Key.Enter) { EndRename(true); e.Handled = true; }
+                    else if (e.Key == Key.Escape) { EndRename(false); e.Handled = true; }
+                };
+                editBox[i].LostKeyboardFocus += delegate { EndRename(true); };
+            }
+            Window.PreviewMouseDown += delegate
+            {
+                if (renaming >= 0 && !editBorder[renaming].IsMouseOver) EndRename(true);
+            };
+            Window.Deactivated += delegate { EndRename(true); };
 
             // A janela inteira é "barra de título" (WindowChrome): arrastar, duplo clique para maximizar
             // e encaixe nas bordas da tela são do próprio Windows.
@@ -321,23 +411,29 @@ namespace CronometroGlass
             Window.LocationChanged += delegate { settingsTimer.Stop(); settingsTimer.Start(); };
             Window.PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
+                if (renaming >= 0) return; // digitando o nome da camada
                 if (e.Key == Key.Space) { Toggle(); e.Handled = true; }
             };
 
-            Window.SourceInitialized += delegate { ApplyGlass(); };
+            Window.SourceInitialized += delegate
+            {
+                ApplyGlass();
+                HwndSource.FromHwnd(new WindowInteropHelper(Window).Handle).AddHook(WndProc);
+            };
             Window.Closing += delegate
             {
-                if (running) Pause();
+                EndRename(true);
+                PauseAll();
                 SaveSettings();
             };
             Window.Closed += delegate
             {
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
-                store.Dispose();
+                foreach (var l in layers) l.Store.Dispose();
             };
 
             // Desligamento/logoff normal do Windows: pausa e grava antes de morrer.
-            app.SessionEnding += delegate { if (running) Pause(); };
+            app.SessionEnding += delegate { PauseAll(); };
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
             var dispatcher = Window.Dispatcher;
@@ -356,7 +452,9 @@ namespace CronometroGlass
                 L = Lang.FromSystem();
                 SaveSettings();
             }
+            if (!twoLayers) active = 0;
             RefreshAutostartPath();
+            ApplyLayers();
             ApplyLanguage();
         }
 
@@ -381,13 +479,104 @@ namespace CronometroGlass
             langHeader.Text = L.Language;
             checkPt.Visibility = L == Lang.Pt ? Visibility.Visible : Visibility.Hidden;
             checkEn.Visibility = L == Lang.En ? Visibility.Visible : Visibility.Hidden;
+            layersHeader.Text = L.Layers;
+            twoLayersText.Text = L.TwoLayers;
+            renameText.Text = L.RenameLayer;
+            foreach (var b in tabBtn) b.ToolTip = L.RenameTip;
             Render();
             UpdateChrome();
         }
 
-        long Elapsed
+        // ---------- Camadas ----------
+
+        string DisplayName(int i)
         {
-            get { return baseTicks + (running ? sw.Elapsed.Ticks : 0); }
+            return layers[i].Name.Length > 0 ? layers[i].Name : string.Format(L.LayerFormat, i + 1);
+        }
+
+        void ToggleTwoLayers()
+        {
+            langPopup.IsOpen = false;
+            EndRename(true);
+            twoLayers = !twoLayers;
+            if (!twoLayers)
+            {
+                // Volta a ser um cronômetro só: a camada 2 fica pausada, com o tempo guardado.
+                Pause(layers[1]);
+                SelectLayer(0);
+            }
+            ApplyLayers();
+            UpdateChrome();
+            SaveSettings();
+        }
+
+        void ApplyLayers()
+        {
+            layerTabs.Visibility = twoLayers ? Visibility.Visible : Visibility.Collapsed;
+            renameBtn.Visibility = twoLayers ? Visibility.Visible : Visibility.Collapsed;
+            checkLayers.Visibility = twoLayers ? Visibility.Visible : Visibility.Hidden;
+            Window.Height = twoLayers ? LayersHeight : NormalHeight;
+        }
+
+        void SelectLayer(int i)
+        {
+            if (i == active) return;
+            EndRename(true);
+            DisarmReset();
+            active = i;
+            Render();
+            UpdateChrome();
+            settingsTimer.Stop();
+            settingsTimer.Start();
+        }
+
+        void BeginRename(int i)
+        {
+            if (!twoLayers) return;
+            EndRename(true);
+            SelectLayer(i);
+            renaming = i;
+            var box = editBox[i];
+            box.Text = DisplayName(i);
+            editBorder[i].Visibility = Visibility.Visible;
+            // O nome antigo apareceria através do vidro do campo de edição.
+            ((UIElement)tabBtn[i].Content).Visibility = Visibility.Hidden;
+            // Depois do clique terminar, senão o botão da aba fica com o foco do mouse.
+            Window.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
+            {
+                if (renaming != i) return;
+                Window.Activate();
+                box.Focus();
+                Keyboard.Focus(box);
+                box.SelectAll();
+            }));
+        }
+
+        void EndRename(bool commit)
+        {
+            if (renaming < 0) return;
+            int i = renaming;
+            renaming = -1;
+            if (commit)
+            {
+                string t = editBox[i].Text.Replace("\r", "").Replace("\n", "").Trim();
+                // Nome vazio ou igual ao padrão = segue o idioma ("Camada 1" / "Layer 1").
+                layers[i].Name = t == string.Format(L.LayerFormat, i + 1) ? "" : t;
+            }
+            editBorder[i].Visibility = Visibility.Collapsed;
+            ((UIElement)tabBtn[i].Content).Visibility = Visibility.Visible;
+            // Foco volta para a janela, para o espaço continuar iniciando/pausando.
+            Keyboard.Focus(Window);
+            UpdateChrome();
+            if (commit) SaveSettings();
+        }
+
+        IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            // Clique no vidro (área de "barra de título" do WindowChrome) não chega como clique do WPF:
+            // WM_NCLBUTTONDOWN / WM_NCRBUTTONDOWN confirmam o nome que está sendo digitado.
+            if (msg == 0x00A1 || msg == 0x00A4) EndRename(true);
+            return IntPtr.Zero;
         }
 
         bool IsMaximized
@@ -395,39 +584,54 @@ namespace CronometroGlass
             get { return Window.WindowState == WindowState.Maximized; }
         }
 
+        bool AnyRunning
+        {
+            get { foreach (var l in layers) if (l.Running) return true; return false; }
+        }
+
         void Toggle()
         {
-            if (running) Pause(); else Start();
+            if (Cur.Running) Pause(Cur); else Start();
         }
 
         void Start()
         {
             DisarmReset();
-            recovered = false;
-            running = true;
-            sw.Restart();
-            TrySave(Elapsed, true);
+            var l = Cur;
+            l.Recovered = false;
+            l.Running = true;
+            l.Sw.Restart();
+            TrySave(l, l.Elapsed, true);
             uiTimer.Start();
             saveTimer.Start();
             UpdateChrome();
         }
 
-        void Pause()
+        void Pause(Layer l)
         {
-            if (!running) return;
-            baseTicks += sw.Elapsed.Ticks;
-            sw.Reset();
-            running = false;
-            uiTimer.Stop();
-            saveTimer.Stop();
-            TrySave(baseTicks, false);
+            if (!l.Running) return;
+            l.BaseTicks += l.Sw.Elapsed.Ticks;
+            l.Sw.Reset();
+            l.Running = false;
+            if (!AnyRunning)
+            {
+                uiTimer.Stop();
+                saveTimer.Stop();
+            }
+            TrySave(l, l.BaseTicks, false);
             Render();
             UpdateChrome();
         }
 
+        void PauseAll()
+        {
+            foreach (var l in layers) Pause(l);
+        }
+
         void ResetClicked()
         {
-            if (Elapsed == 0 && !running) return;
+            var l = Cur;
+            if (l.Elapsed == 0 && !l.Running) return;
             if (!resetArmed)
             {
                 // Zerar pede confirmação para não perder o tempo salvo sem querer.
@@ -437,10 +641,10 @@ namespace CronometroGlass
                 return;
             }
             DisarmReset();
-            if (running) Pause();
-            baseTicks = 0;
-            recovered = false;
-            TrySave(0, false);
+            Pause(l);
+            l.BaseTicks = 0;
+            l.Recovered = false;
+            TrySave(l, 0, false);
             Render();
             UpdateChrome();
         }
@@ -456,26 +660,26 @@ namespace CronometroGlass
         void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
             if (e.Mode != PowerModes.Suspend) return;
-            Window.Dispatcher.Invoke(new Action(Pause));
+            Window.Dispatcher.Invoke(new Action(PauseAll));
         }
 
-        void TrySave(long ticks, bool isRunning)
+        void TrySave(Layer l, long ticks, bool isRunning)
         {
-            bool wasFailed = saveFailed;
+            bool wasFailed = l.SaveFailed;
             try
             {
-                store.Save(ticks, isRunning);
-                saveFailed = false;
+                l.Store.Save(ticks, isRunning);
+                l.SaveFailed = false;
             }
-            catch (IOException) { saveFailed = true; }
-            catch (UnauthorizedAccessException) { saveFailed = true; }
-            if (wasFailed != saveFailed) UpdateChrome();
+            catch (IOException) { l.SaveFailed = true; }
+            catch (UnauthorizedAccessException) { l.SaveFailed = true; }
+            if (wasFailed != l.SaveFailed) UpdateChrome();
         }
 
         void Render()
         {
             if (L == null) return;
-            var ts = TimeSpan.FromTicks(Elapsed);
+            var ts = TimeSpan.FromTicks(Cur.Elapsed);
             string main = string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00}", (long)ts.TotalHours, ts.Minutes, ts.Seconds);
             string frac = L.DecimalSep + (ts.Milliseconds / 10).ToString("00", CultureInfo.InvariantCulture);
             if (timeMain.Text != main) timeMain.Text = main;
@@ -485,13 +689,29 @@ namespace CronometroGlass
         void UpdateChrome()
         {
             if (L == null) return; // ainda carregando: ApplyLanguage atualiza tudo em seguida
+            var cur = Cur;
+            bool running = cur.Running;
+            long elapsed = cur.Elapsed;
             startGlyph.Text = running ? "" : "";
-            startText.Text = running ? L.Pause : (Elapsed > 0 ? L.Resume : L.Start);
+            startText.Text = running ? L.Pause : (elapsed > 0 ? L.Resume : L.Start);
             startBtn.Background = running ? PauseTint : StartTint;
 
             resetText.Text = resetArmed ? L.Confirm : L.Reset;
             resetBtn.Background = resetArmed ? ConfirmTint : ResetTint;
-            resetBtn.Opacity = (Elapsed == 0 && !running) ? 0.45 : 1;
+            resetBtn.Opacity = (elapsed == 0 && !running) ? 0.45 : 1;
+
+            // Abas: a ativa fica em vidro claro; o ponto verde mostra camada rodando (mesmo em segundo plano).
+            for (int i = 0; i < 2; i++)
+            {
+                bool on = i == active;
+                tabBtn[i].Background = on ? TabOn : Brushes.Transparent;
+                tabBtn[i].BorderBrush = on ? TabOnRim : Brushes.Transparent;
+                tabName[i].Foreground = on ? TabOnText : TabOffText;
+                tabName[i].FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+                tabName[i].Text = DisplayName(i);
+                tabDot[i].Visibility = layers[i].Running ? Visibility.Visible : Visibility.Collapsed;
+            }
+            Window.Title = twoLayers ? L.Title + " · " + DisplayName(active) : L.Title;
 
             maxBtn.Content = IsMaximized ? "" : "";
             maxBtn.ToolTip = IsMaximized ? L.Restore : L.Maximize;
@@ -499,7 +719,7 @@ namespace CronometroGlass
             autoGlyph.Text = IsAutostart() ? "" : "";
             autoGlyph.Opacity = 1;
 
-            if (saveFailed)
+            if (cur.SaveFailed)
             {
                 statusDot.Fill = DotRed;
                 statusText.Text = L.StatusSaveFailed;
@@ -509,12 +729,12 @@ namespace CronometroGlass
                 statusDot.Fill = DotGreen;
                 statusText.Text = L.StatusRunning;
             }
-            else if (recovered)
+            else if (cur.Recovered)
             {
                 statusDot.Fill = DotAmber;
-                statusText.Text = L.StatusRecovered + recoveredAt.ToString(L.RecoveredFormat, L.Culture);
+                statusText.Text = L.StatusRecovered + cur.RecoveredAt.ToString(L.RecoveredFormat, L.Culture);
             }
-            else if (Elapsed > 0)
+            else if (elapsed > 0)
             {
                 statusDot.Fill = DotIdle;
                 statusText.Text = L.StatusPaused;
@@ -628,6 +848,10 @@ namespace CronometroGlass
                     else if (key == "top") double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out top);
                     else if (key == "max") startMaximized = val == "1";
                     else if (key == "lang") L = Lang.FromCode(val);
+                    else if (key == "layers") twoLayers = val == "1";
+                    else if (key == "active") active = val == "1" ? 1 : 0;
+                    else if (key == "name1") layers[0].Name = val.Trim();
+                    else if (key == "name2") layers[1].Name = val.Trim();
                 }
                 var vs = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
                                   SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
@@ -651,7 +875,9 @@ namespace CronometroGlass
             try
             {
                 File.WriteAllText(SettingsPath, string.Format(CultureInfo.InvariantCulture,
-                    "left={0}\ntop={1}\nmax={2}\nlang={3}\n", left, top, IsMaximized ? 1 : 0, L == null ? "" : L.Code));
+                    "left={0}\ntop={1}\nmax={2}\nlang={3}\nlayers={4}\nactive={5}\nname1={6}\nname2={7}\n",
+                    left, top, IsMaximized ? 1 : 0, L == null ? "" : L.Code,
+                    twoLayers ? 1 : 0, active, layers[0].Name, layers[1].Name));
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
@@ -897,6 +1123,46 @@ namespace CronometroGlass
       </Setter>
     </Style>
 
+    <!-- aba de camada: segmento de vidro; o código pinta a ativa (Background/BorderBrush) -->
+    <Style x:Key='Seg' TargetType='Button'>
+      <Setter Property='FontSize' Value='12.5'/>
+      <Setter Property='Background' Value='Transparent'/>
+      <Setter Property='BorderBrush' Value='Transparent'/>
+      <Setter Property='Focusable' Value='False'/>
+      <Setter Property='WindowChrome.IsHitTestVisibleInChrome' Value='True'/>
+      <Setter Property='Cursor' Value='Hand'/>
+      <Setter Property='Template'>
+        <Setter.Value>
+          <ControlTemplate TargetType='Button'>
+            <Grid>
+              <Border CornerRadius='12' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='1'/>
+              <Border x:Name='Hover' CornerRadius='12' Background='White' Opacity='0'/>
+              <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center' Margin='10,0,10,0'/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='0.07'/></Trigger>
+              <Trigger Property='IsPressed' Value='True'><Setter TargetName='Hover' Property='Opacity' Value='0.14'/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key='Rename' TargetType='TextBox'>
+      <Setter Property='Background' Value='Transparent'/>
+      <Setter Property='BorderThickness' Value='0'/>
+      <Setter Property='Foreground' Value='White'/>
+      <Setter Property='CaretBrush' Value='White'/>
+      <Setter Property='SelectionBrush' Value='#FF30D158'/>
+      <Setter Property='FontSize' Value='12.5'/>
+      <Setter Property='FontWeight' Value='SemiBold'/>
+      <Setter Property='MaxLength' Value='24'/>
+      <Setter Property='VerticalAlignment' Value='Center'/>
+      <Setter Property='HorizontalContentAlignment' Value='Center'/>
+      <Setter Property='Margin' Value='8,0,8,0'/>
+      <Setter Property='WindowChrome.IsHitTestVisibleInChrome' Value='True'/>
+    </Style>
+
     <Style x:Key='Link' TargetType='Button'>
       <Setter Property='Foreground' Value='White'/>
       <Setter Property='Focusable' Value='False'/>
@@ -969,6 +1235,7 @@ namespace CronometroGlass
     <Grid Margin='22,0,22,0'>
       <Grid.RowDefinitions>
         <RowDefinition Height='42'/>
+        <RowDefinition Height='Auto'/>
         <RowDefinition Height='*'/>
         <RowDefinition Height='Auto'/>
         <RowDefinition Height='44'/>
@@ -1011,6 +1278,22 @@ namespace CronometroGlass
                            HorizontalAlignment='Right' VerticalAlignment='Center'/>
               </Grid>
             </Button>
+            <Border Height='1' Background='#1FFFFFFF' Margin='8,5,8,3'/>
+            <TextBlock x:Name='LayersHeader' Foreground='#99FFFFFF' FontSize='11' FontWeight='SemiBold' Margin='10,5,10,5'/>
+            <Button x:Name='TwoLayersBtn' Style='{StaticResource MenuRow}'>
+              <Grid>
+                <TextBlock x:Name='TwoLayersText'/>
+                <TextBlock x:Name='CheckLayers' Text='&#xE73E;' FontFamily='Segoe MDL2 Assets' FontSize='11' Foreground='#FF30D158'
+                           HorizontalAlignment='Right' VerticalAlignment='Center'/>
+              </Grid>
+            </Button>
+            <Button x:Name='RenameBtn' Style='{StaticResource MenuRow}'>
+              <Grid>
+                <TextBlock x:Name='RenameText'/>
+                <TextBlock Text='&#xE70F;' FontFamily='Segoe MDL2 Assets' FontSize='11' Foreground='#99FFFFFF'
+                           HorizontalAlignment='Right' VerticalAlignment='Center'/>
+              </Grid>
+            </Button>
           </StackPanel>
         </Border>
       </Popup>
@@ -1023,8 +1306,45 @@ namespace CronometroGlass
       <TextBlock x:Name='TitleText' Foreground='#99FFFFFF' FontSize='12' FontWeight='SemiBold'
                  HorizontalAlignment='Center' VerticalAlignment='Center' Margin='0,4,0,0' IsHitTestVisible='False'/>
 
+      <!-- camadas: duas abas, cada uma um cronômetro independente (aparecem com 'Duas camadas' ligado) -->
+      <Border x:Name='LayerTabs' Grid.Row='1' MaxWidth='520' Height='30' CornerRadius='15' Padding='2'
+              Background='#14FFFFFF' BorderThickness='1' Margin='0,2,0,2' Visibility='Collapsed'>
+        <Border.BorderBrush>
+          <LinearGradientBrush StartPoint='0,0' EndPoint='0.3,1'>
+            <GradientStop Color='#50FFFFFF' Offset='0'/>
+            <GradientStop Color='#10FFFFFF' Offset='0.5'/>
+            <GradientStop Color='#30FFFFFF' Offset='1'/>
+          </LinearGradientBrush>
+        </Border.BorderBrush>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition/>
+            <ColumnDefinition Width='2'/>
+            <ColumnDefinition/>
+          </Grid.ColumnDefinitions>
+          <Button x:Name='Tab0' Style='{StaticResource Seg}'>
+            <StackPanel Orientation='Horizontal'>
+              <Ellipse x:Name='TabDot0' Width='6' Height='6' Fill='#FF30D158' Margin='0,1,6,0' VerticalAlignment='Center'/>
+              <TextBlock x:Name='TabName0' MaxWidth='120' TextTrimming='CharacterEllipsis' VerticalAlignment='Center'/>
+            </StackPanel>
+          </Button>
+          <Border x:Name='Edit0' CornerRadius='12' Background='#38FFFFFF' BorderBrush='#70FFFFFF' BorderThickness='1' Visibility='Collapsed'>
+            <TextBox x:Name='EditBox0' Style='{StaticResource Rename}'/>
+          </Border>
+          <Button x:Name='Tab1' Grid.Column='2' Style='{StaticResource Seg}'>
+            <StackPanel Orientation='Horizontal'>
+              <Ellipse x:Name='TabDot1' Width='6' Height='6' Fill='#FF30D158' Margin='0,1,6,0' VerticalAlignment='Center'/>
+              <TextBlock x:Name='TabName1' MaxWidth='120' TextTrimming='CharacterEllipsis' VerticalAlignment='Center'/>
+            </StackPanel>
+          </Button>
+          <Border x:Name='Edit1' Grid.Column='2' CornerRadius='12' Background='#38FFFFFF' BorderBrush='#70FFFFFF' BorderThickness='1' Visibility='Collapsed'>
+            <TextBox x:Name='EditBox1' Style='{StaticResource Rename}'/>
+          </Border>
+        </Grid>
+      </Border>
+
       <!-- Viewbox: o tempo cresce junto com a janela quando maximizada -->
-      <Viewbox x:Name='TimeBox' Grid.Row='1' Margin='8,0,8,4' IsHitTestVisible='False'>
+      <Viewbox x:Name='TimeBox' Grid.Row='2' Margin='8,0,8,4' IsHitTestVisible='False'>
       <StackPanel Orientation='Horizontal' HorizontalAlignment='Center' VerticalAlignment='Center'>
         <TextBlock x:Name='TimeMain' Text='00:00:00' FontSize='60' FontWeight='Light' Foreground='White' Typography.NumeralAlignment='Tabular'>
           <TextBlock.Effect><DropShadowEffect BlurRadius='16' ShadowDepth='0' Opacity='0.35' Color='Black'/></TextBlock.Effect>
@@ -1034,7 +1354,7 @@ namespace CronometroGlass
       </StackPanel>
       </Viewbox>
 
-      <Grid Grid.Row='2' MaxWidth='520'>
+      <Grid Grid.Row='3' MaxWidth='520'>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width='3*'/>
           <ColumnDefinition Width='10'/>
@@ -1054,7 +1374,7 @@ namespace CronometroGlass
         </Button>
       </Grid>
 
-      <Grid Grid.Row='3' MaxWidth='520' VerticalAlignment='Center' Margin='4,2,2,0'>
+      <Grid Grid.Row='4' MaxWidth='520' VerticalAlignment='Center' Margin='4,2,2,0'>
         <StackPanel Orientation='Horizontal' VerticalAlignment='Center' IsHitTestVisible='False'>
           <Ellipse x:Name='StatusDot' Width='7' Height='7' Margin='0,1,8,0' VerticalAlignment='Center'/>
           <TextBlock x:Name='StatusText' Foreground='#B3FFFFFF' FontSize='11.5' VerticalAlignment='Center'/>

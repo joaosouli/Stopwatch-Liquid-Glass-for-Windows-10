@@ -19,6 +19,9 @@ time**. Press *Resume* and it picks up where it left off.
   Aero Snap and the system menu work too.
 - **Maximize:** the time scales up to fill the screen.
 - **Safe reset:** *Reset* asks for a second click to confirm.
+- **Two layers** (optional): turn on *Two layers* in the ⚙ menu to get two independent stopwatches,
+  e.g. "Work" and "Gaming". Each one keeps its own time and can run at the same time as the other.
+  Double-click a layer's tab (or use *Rename layer* in the ⚙ menu) to rename it.
 - **English and Portuguese:** on first launch it follows the Windows display language
   (Portuguese for `pt-*`, otherwise English). You can switch any time from the ⚙ gear in the top-left corner.
 - **Open with Windows** (optional): one click registers it to start when you log in.
@@ -48,7 +51,7 @@ The state lives in `%LOCALAPPDATA%\CronometroGlass\estado.bin`, a 128-byte file 
 that are written alternately. Writes use `FileOptions.WriteThrough` plus `Flush(true)`, so they go
 straight to disk and don't sit in the Windows cache. Each slot has a sequence number and a CRC32.
 On startup the valid slot with the highest sequence wins, so a power cut in the middle of a write
-can never corrupt the saved time.
+can never corrupt the saved time. The second layer uses the same format in `estado2.bin`.
 
 If the last saved state says "running", the app knows it didn't close normally. It restores that
 time paused and shows *Recovered* with the date and time of the last save.
