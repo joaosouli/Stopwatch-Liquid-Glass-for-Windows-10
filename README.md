@@ -4,7 +4,7 @@ A tiny stopwatch for Windows 10 with an Apple "Liquid Glass"-style interface, bu
 **never lose your time, even if the PC shuts down suddenly.**
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Stopwatch Liquid Glass running on the Windows 10 desktop: a translucent glass window showing 00:00:00.00 with Start and Reset buttons" width="454">
+  <img src="docs/screenshot.png" alt="Stopwatch Liquid Glass running on the Windows 10 desktop: a translucent glass window with two layer tabs named working and playing, showing 00:00:00.00 with Start and Reset buttons" width="415">
 </p>
 
 While it runs, the elapsed time is written to disk every half second. If the power goes out or
